@@ -549,8 +549,8 @@ namespace HotkeyMute
         {
             allowShow = !startHidden;
             Text = "Hotkey Mute v" + Assembly.GetExecutingAssembly().GetName().Version.ToString(3);
-            ClientSize = new Size(640, 420);
-            MinimumSize = new Size(600, 340);
+            ClientSize = new Size(640, 470);
+            MinimumSize = new Size(600, 420);
             StartPosition = FormStartPosition.CenterScreen;
             Icon appIcon = Icon.ExtractAssociatedIcon(Application.ExecutablePath);
             Icon = appIcon;
@@ -560,65 +560,66 @@ namespace HotkeyMute
             current = data.Find(data.Selected);
             bindings = current.Items;
 
-            var lblCfg = new Label { Text = "Config:", AutoSize = true, Left = 12, Top = 17 };
-            cbConfig.DropDownStyle = ComboBoxStyle.DropDownList; cbConfig.Left = 62; cbConfig.Top = 13; cbConfig.Width = 160;
+            // Top: actions on the program list.
+            var add = new Button { Text = "Add...", Left = 12, Top = 12, Width = 80 };
+            var remove = new Button { Text = "Remove", Left = 98, Top = 12, Width = 80 };
+            var toggle = new Button { Text = "Toggle now", Left = 184, Top = 12, Width = 90 };
+            add.Click += delegate { EditBinding(null); };
+            remove.Click += delegate { RemoveSelected(); };
+            toggle.Click += delegate { ToggleSelected(); };
+            new ToolTip().SetToolTip(remove, "Removes a program from this config. On a built-in action it just clears the hotkey.");
+
+            lv.View = View.Details; lv.ShowItemToolTips = true; lv.FullRowSelect = true; lv.MultiSelect = false; lv.HideSelection = false;
+            lv.ShowGroups = true; lv.Groups.Add(gProgs); lv.Groups.Add(gBuiltIn);
+            lv.Columns.Add("Program / action", 230); lv.Columns.Add("Hotkey", 160); lv.Columns.Add("Status", 210);
+            lv.Left = 12; lv.Top = 44; lv.Width = ClientSize.Width - 24; lv.Height = ClientSize.Height - 210;
+            lv.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Bottom;
+            lv.DoubleClick += delegate { EditBinding(Selected()); };
+
+            // Bottom, first box: config management.
+            var gbConfig = new GroupBox { Text = "Config management", Left = 12, Top = ClientSize.Height - 158, Width = ClientSize.Width - 24, Height = 58,
+                Anchor = AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right };
+            var lblCfg = new Label { Text = "Config:", AutoSize = true, Left = 10, Top = 27 };
+            cbConfig.DropDownStyle = ComboBoxStyle.DropDownList; cbConfig.Left = 58; cbConfig.Top = 23; cbConfig.Width = 140;
             cbConfig.SelectedIndexChanged += delegate
             {
                 if (loadingCombo) return;
                 Config c = data.Find(cbConfig.SelectedItem as string);
                 if (c != null && c != current) SwitchConfig(c);
             };
-            var btnNew = new Button { Text = "New", Left = 230, Top = 12, Width = 52 };
-            btnRename = new Button { Text = "Rename", Left = 286, Top = 12, Width = 62 };
-            var btnDup = new Button { Text = "Duplicate", Left = 352, Top = 12, Width = 70 };
-            btnDelete = new Button { Text = "Delete", Left = 426, Top = 12, Width = 52 };
-            var btnExport = new Button { Text = "Export...", Left = 482, Top = 12, Width = 70 };
-            var btnImport = new Button { Text = "Import...", Left = 556, Top = 12, Width = 70 };
+            var btnNew = new Button { Text = "New", Left = 206, Top = 22, Width = 52 };
+            btnRename = new Button { Text = "Rename", Left = 262, Top = 22, Width = 62 };
+            var btnDup = new Button { Text = "Duplicate", Left = 328, Top = 22, Width = 70 };
+            btnDelete = new Button { Text = "Delete", Left = 402, Top = 22, Width = 52 };
+            var btnExport = new Button { Text = "Export...", Left = 458, Top = 22, Width = 70 };
+            var btnImport = new Button { Text = "Import...", Left = 532, Top = 22, Width = 70 };
             btnNew.Click += delegate { NewConfig(); };
             btnRename.Click += delegate { RenameConfig(); };
             btnDup.Click += delegate { DuplicateConfig(); };
             btnDelete.Click += delegate { DeleteConfig(); };
             btnExport.Click += delegate { ExportConfig(); };
             btnImport.Click += delegate { ImportConfig(); };
-            var cfgTips = new ToolTip();
-            cfgTips.SetToolTip(cbConfig, "Only the selected config's hotkeys are active. Switching does not mute or unmute anything.");
+            new ToolTip().SetToolTip(cbConfig, "Only the selected config's hotkeys are active. Switching does not mute or unmute anything.");
+            gbConfig.Controls.AddRange(new Control[] { lblCfg, cbConfig, btnNew, btnRename, btnDup, btnDelete, btnExport, btnImport });
 
-            lv.View = View.Details; lv.ShowItemToolTips = true; lv.FullRowSelect = true; lv.MultiSelect = false; lv.HideSelection = false;
-            lv.ShowGroups = true; lv.Groups.Add(gProgs); lv.Groups.Add(gBuiltIn);
-            lv.Columns.Add("Program / action", 230); lv.Columns.Add("Hotkey", 160); lv.Columns.Add("Status", 210);
-            lv.Left = 12; lv.Top = 46; lv.Width = ClientSize.Width - 24; lv.Height = ClientSize.Height - 124;
-            lv.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Bottom;
-            lv.DoubleClick += delegate { EditBinding(Selected()); };
-
-            var add = new Button { Text = "Add...", Left = 12, Top = ClientSize.Height - 68, Width = 80, Anchor = AnchorStyles.Bottom | AnchorStyles.Left };
-            var remove = new Button { Text = "Remove", Left = 98, Top = ClientSize.Height - 68, Width = 80, Anchor = AnchorStyles.Bottom | AnchorStyles.Left };
-            var toggle = new Button { Text = "Toggle now", Left = 184, Top = ClientSize.Height - 68, Width = 90, Anchor = AnchorStyles.Bottom | AnchorStyles.Left };
-            var restart = new Button { Text = "Reset keyboard listener", Left = 280, Top = ClientSize.Height - 68, Width = 150, Anchor = AnchorStyles.Bottom | AnchorStyles.Left };
+            // Bottom, second box: everything else.
+            var gbMisc = new GroupBox { Text = "Misc", Left = 12, Top = ClientSize.Height - 92, Width = ClientSize.Width - 24, Height = 80,
+                Anchor = AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right };
+            var restart = new Button { Text = "Reset keyboard listener", Left = 10, Top = 20, Width = 150 };
             restart.Click += delegate { RestartHook(); };
             new ToolTip().SetToolTip(restart, "If your hotkeys stop responding, click this to reload the keyboard listener.\nYour settings are not changed.");
-            add.Click += delegate { EditBinding(null); };
-            remove.Click += delegate { RemoveSelected(); };
-            toggle.Click += delegate { ToggleSelected(); };
+            hint = new Label { Text = "Closing the window hides it to the tray.", AutoSize = true, ForeColor = SystemColors.GrayText, Left = 168, Top = 25 };
+            hintTimer.Interval = 3000;
+            hintTimer.Tick += delegate { hintTimer.Stop(); hint.Text = "Closing the window hides it to the tray."; };
 
-            cbNotify.Text = "Show notifications"; cbNotify.Checked = notify; cbNotify.AutoSize = true;
-            cbNotify.Left = 12; cbNotify.Top = ClientSize.Height - 34; cbNotify.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
+            cbNotify.Text = "Show notifications"; cbNotify.Checked = notify; cbNotify.AutoSize = true; cbNotify.Left = 10; cbNotify.Top = 50;
             cbNotify.CheckedChanged += delegate { notify = cbNotify.Checked; Save(); };
-
-            cbStartup.Text = "Start with Windows (in tray)"; cbStartup.AutoSize = true;
-            cbStartup.Left = 170; cbStartup.Top = ClientSize.Height - 34; cbStartup.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
+            cbStartup.Text = "Start with Windows (in tray)"; cbStartup.AutoSize = true; cbStartup.Left = 170; cbStartup.Top = 50;
             cbStartup.Checked = GetStartup();
             cbStartup.CheckedChanged += delegate { SetStartup(cbStartup.Checked); };
+            gbMisc.Controls.AddRange(new Control[] { restart, hint, cbNotify, cbStartup });
 
-            hint = new Label { Text = "Closing hides to the tray.", AutoSize = true, ForeColor = SystemColors.GrayText,
-                Left = 440, Top = ClientSize.Height - 62, Anchor = AnchorStyles.Bottom | AnchorStyles.Left };
-            hintTimer.Interval = 3000;
-            hintTimer.Tick += delegate { hintTimer.Stop(); hint.Text = "Closing hides to the tray."; };
-
-            new ToolTip().SetToolTip(remove, "Removes a program from this config. On a built-in action it just clears the hotkey.");
-
-            Controls.AddRange(new Control[] { lblCfg, cbConfig, btnNew, btnRename, btnDup, btnDelete, btnExport, btnImport,
-                lv, add, remove, toggle, restart, cbNotify, cbStartup, hint });
-
+            Controls.AddRange(new Control[] { add, remove, toggle, lv, gbConfig, gbMisc });
             var menu = new ContextMenuStrip();
             menu.Items.Add("Open", null, delegate { ShowWindow(); });
             menu.Items.Add("Exit", null, delegate { exiting = true; Close(); });
