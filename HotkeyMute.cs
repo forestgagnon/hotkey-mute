@@ -18,7 +18,7 @@ using System.Windows.Forms;
 using Microsoft.Win32;
 
 // Bump this for each release; it is shown in the window title and the exe properties.
-[assembly: AssemblyVersion("1.4.1")]
+[assembly: AssemblyVersion("1.4.2")]
 [assembly: AssemblyTitle("Hotkey Mute")]
 
 namespace HotkeyMute
@@ -362,7 +362,7 @@ namespace HotkeyMute
                 if (line.StartsWith("name=")) { if (line.Length > 5) c.Name = line.Substring(5); continue; }
                 string[] p = line.Split('|');
                 int mods, vk;
-                if (p.Length == 3 && int.TryParse(p[1], out mods) && int.TryParse(p[2], out vk) && vk != 0)
+                if (p.Length == 3 && int.TryParse(p[1], out mods) && int.TryParse(p[2], out vk))
                     c.Items.Add(new Binding { Process = p[0], Mods = mods, Vk = vk });
             }
             return c;
@@ -429,23 +429,24 @@ namespace HotkeyMute
             var refresh = new Button { Text = "Refresh", Left = 308, Top = 29, Width = 62 };
             refresh.Click += delegate { FillProcesses(); };
 
-            var l2 = new Label { Text = "Hotkey (click the box, then press the keys):", Left = 12, Top = 62, Width = 360, Height = 18 };
-            tbKey.Left = 12; tbKey.Top = 82; tbKey.Width = 358; tbKey.ReadOnly = true; tbKey.BackColor = SystemColors.Window;
+            var l2 = new Label { Text = "Hotkey, optional (click the box, then press the keys):", Left = 12, Top = 62, Width = 360, Height = 18 };
+            tbKey.Left = 12; tbKey.Top = 82; tbKey.Width = 290; tbKey.ReadOnly = true; tbKey.BackColor = SystemColors.Window;
             tbKey.PreviewKeyDown += delegate(object s, PreviewKeyDownEventArgs e) { e.IsInputKey = true; };
             tbKey.KeyDown += OnKey;
 
+            var clear = new Button { Text = "Clear", Left = 308, Top = 81, Width = 62 };
+            clear.Click += delegate { Mods = 0; Vk = 0; tbKey.Text = ""; tbKey.Focus(); };
             var ok = new Button { Text = "OK", Left = 214, Top = 114, Width = 75 };
             var cancel = new Button { Text = "Cancel", Left = 295, Top = 114, Width = 75 };
             ok.Click += delegate
             {
                 if (!isAction && Audio.Norm(cb.Text).Length == 0) { MessageBox.Show(this, "Enter a program name.", "Add hotkey"); return; }
-                if (Vk == 0) { MessageBox.Show(this, "Press a hotkey in the hotkey box.", "Add hotkey"); return; }
                 ProcessName = isAction ? null : cb.Text.Trim();
                 DialogResult = DialogResult.OK;
             };
             cancel.Click += delegate { DialogResult = DialogResult.Cancel; };
 
-            Controls.AddRange(new Control[] { l1, cb, refresh, l2, tbKey, ok, cancel });
+            Controls.AddRange(new Control[] { l1, cb, refresh, l2, tbKey, clear, ok, cancel });
             if (isAction)
             {
                 Text = "Set hotkey";
