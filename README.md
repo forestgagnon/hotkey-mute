@@ -8,6 +8,20 @@ A small Windows tray app that lets you register global hotkeys to mute/unmute in
 2. Click **Add...**, pick a program that is playing audio (or type a name such as `game.exe`), click the hotkey box and press the key combination.
 3. Press the hotkey anywhere to toggle that program's mute. Double-click a row (or **Toggle now**) to toggle from the window.
 
+## Configs
+
+A config is a saved set of programs and hotkeys. The **Default** config is selected out of the box, so simple use needs nothing extra.
+
+- Pick a config from the dropdown at the top; only the selected config's hotkeys are active. Switching never mutes or unmutes anything by itself.
+- **New**, **Rename**, **Duplicate** and **Delete** manage configs (Default can't be renamed or deleted).
+- **Export...** saves the selected config to a `.hmcfg` file and **Import...** adds one back (it never overwrites: a name clash gets a numeric suffix).
+
+## Built-in actions
+
+Four actions sit under the programs list. They are unset by default; double-click one to give it a hotkey. They are shared by all configs:
+
+- **Mute all / Unmute all in this config**: every program in the selected config.
+- **Mute everything / Unmute everything (system-wide)**: every program that currently has an audio stream.
 Several programs can share one hotkey (they are marked with a warning sign in the list). Pressing it toggles all of them, and each flips from its own current state. Combined with **Toggle now** this lets you set up programs that swap back and forth.
 
 Double-click a row to edit its program and hotkey.

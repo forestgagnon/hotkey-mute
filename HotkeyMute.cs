@@ -18,7 +18,7 @@ using System.Windows.Forms;
 using Microsoft.Win32;
 
 // Bump this for each release; it is shown in the window title and the exe properties.
-[assembly: AssemblyVersion("1.3.0")]
+[assembly: AssemblyVersion("1.4.0")]
 [assembly: AssemblyTitle("Hotkey Mute")]
 
 namespace HotkeyMute
@@ -164,6 +164,27 @@ namespace HotkeyMute
             return anyUnmuted;
         }
 
+        // Mutes/unmutes every audio session (processes == null) or only those of the given programs.
+        // Returns how many sessions were changed.
+        public static int SetMuteAll(ICollection<string> processes, bool mute)
+        {
+            HashSet<string> want = null;
+            if (processes != null)
+            {
+                want = new HashSet<string>();
+                foreach (string p in processes) want.Add(Norm(p));
+            }
+            Guid ctx = Guid.Empty;
+            int changed = 0;
+            foreach (var s in Sessions())
+            {
+                if (want != null && !want.Contains(Norm(s.Name))) continue;
+                s.Volume.SetMute(mute, ref ctx);
+                changed++;
+            }
+            return changed;
+        }
+
         public static string Status(string process)
         {
             var list = For(process);
@@ -177,9 +198,60 @@ namespace HotkeyMute
 
     class Binding
     {
-        public string Process;
+        public string Process; // null for built-in actions
         public int Mods; // Alt=1 Ctrl=2 Shift=4 Win=8
-        public int Vk;
+        public int Vk;   // 0 = not set (only built-in actions can be unset)
+        public string Action; // null for a program row; otherwise a BuiltIn id
+    }
+
+    // A named set of program hotkeys. Only the selected config is live.
+    class Config
+    {
+        public string Name;
+        public List<Binding> Items = new List<Binding>();
+    }
+
+    // Built-in actions: one hotkey each, shared by every config, unbound by default.
+    static class BuiltIn
+    {
+        public static readonly string[] Ids = { "cfg-mute", "cfg-unmute", "sys-mute", "sys-unmute" };
+
+        public static string Label(string id)
+        {
+            switch (id)
+            {
+                case "cfg-mute": return "Mute all in this config";
+                case "cfg-unmute": return "Unmute all in this config";
+                case "sys-mute": return "Mute everything (system-wide)";
+                default: return "Unmute everything (system-wide)";
+            }
+        }
+
+        public static string Scope(string id)
+        {
+            return id.StartsWith("cfg") ? "Programs in the selected config" : "All programs with audio";
+        }
+    }
+
+    class AppData
+    {
+        public List<Config> Configs = new List<Config>();
+        public List<Binding> Actions = new List<Binding>();
+        public string Selected = "Default";
+        public bool Notify = true;
+
+        public Config Find(string name)
+        {
+            foreach (var c in Configs) if (string.Equals(c.Name, name, StringComparison.OrdinalIgnoreCase)) return c;
+            return null;
+        }
+
+        public Config GetOrAdd(string name)
+        {
+            Config c = Find(name);
+            if (c == null) { c = new Config { Name = name }; Configs.Add(c); }
+            return c;
+        }
     }
 
     static class Hotkeys
@@ -200,35 +272,133 @@ namespace HotkeyMute
         static readonly string Dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "HotkeyMute");
         static readonly string FilePath = Path.Combine(Dir, "settings.txt");
 
-        public static void Load(List<Binding> bindings, out bool notify)
+        // File format (plain text):
+        //   notify=1
+        //   selected=Default
+        //   action:cfg-mute|mods|vk          (built-in action hotkeys, shared by all configs)
+        //   [config:Default]
+        //   firefox.exe|mods|vk              (program hotkeys of that config)
+        // Program lines that appear before any [config:] header belong to Default, which is how
+        // settings files from versions before 1.4 load unchanged.
+        public static AppData Load()
         {
-            notify = true;
+            var d = new AppData();
+            foreach (string id in BuiltIn.Ids) d.Actions.Add(new Binding { Action = id });
             try
             {
-                if (!File.Exists(FilePath)) return;
-                foreach (string line in File.ReadAllLines(FilePath))
+                Config cur = null;
+                if (File.Exists(FilePath))
                 {
-                    if (line.StartsWith("notify=")) { notify = line.Substring(7) == "1"; continue; }
-                    string[] p = line.Split('|');
-                    int mods, vk;
-                    if (p.Length == 3 && int.TryParse(p[1], out mods) && int.TryParse(p[2], out vk))
-                        bindings.Add(new Binding { Process = p[0], Mods = mods, Vk = vk });
+                    foreach (string raw in File.ReadAllLines(FilePath))
+                    {
+                        string line = raw.TrimEnd();
+                        if (line.Length == 0) continue;
+                        if (line.StartsWith("notify=")) { d.Notify = line.Substring(7) == "1"; continue; }
+                        if (line.StartsWith("selected=")) { d.Selected = line.Substring(9); continue; }
+                        if (line.StartsWith("[config:") && line.EndsWith("]"))
+                        {
+                            cur = d.GetOrAdd(line.Substring(8, line.Length - 9));
+                            continue;
+                        }
+                        string[] p = line.Split('|');
+                        int mods, vk;
+                        if (p.Length != 3 || !int.TryParse(p[1], out mods) || !int.TryParse(p[2], out vk)) continue;
+                        if (p[0].StartsWith("action:"))
+                        {
+                            string id = p[0].Substring(7);
+                            foreach (var a in d.Actions) if (a.Action == id) { a.Mods = mods; a.Vk = vk; }
+                            continue;
+                        }
+                        if (cur == null) cur = d.GetOrAdd("Default");
+                        cur.Items.Add(new Binding { Process = p[0], Mods = mods, Vk = vk });
+                    }
                 }
             }
             catch { }
+            Config def = d.GetOrAdd("Default");
+            d.Configs.Remove(def); d.Configs.Insert(0, def); // Default is always first
+            if (d.Find(d.Selected) == null) d.Selected = "Default";
+            return d;
         }
 
-        public static void Save(List<Binding> bindings, bool notify)
+        public static void Save(AppData d)
         {
             try
             {
                 Directory.CreateDirectory(Dir);
                 var lines = new List<string>();
-                lines.Add("notify=" + (notify ? "1" : "0"));
-                foreach (var b in bindings) lines.Add(b.Process + "|" + b.Mods + "|" + b.Vk);
+                lines.Add("notify=" + (d.Notify ? "1" : "0"));
+                lines.Add("selected=" + d.Selected);
+                foreach (var a in d.Actions) lines.Add("action:" + a.Action + "|" + a.Mods + "|" + a.Vk);
+                foreach (var c in d.Configs)
+                {
+                    lines.Add("[config:" + c.Name + "]");
+                    foreach (var b in c.Items) lines.Add(b.Process + "|" + b.Mods + "|" + b.Vk);
+                }
                 File.WriteAllLines(FilePath, lines.ToArray());
             }
             catch { }
+        }
+
+        // One config as a standalone file for sharing/backup.
+        public static void Export(Config c, string path)
+        {
+            var lines = new List<string>();
+            lines.Add("hotkeymute-config=1");
+            lines.Add("name=" + c.Name);
+            foreach (var b in c.Items) lines.Add(b.Process + "|" + b.Mods + "|" + b.Vk);
+            File.WriteAllLines(path, lines.ToArray());
+        }
+
+        // Returns null if the file is not a Hotkey Mute config.
+        public static Config Import(string path)
+        {
+            string[] all = File.ReadAllLines(path);
+            if (all.Length == 0 || all[0].Trim() != "hotkeymute-config=1") return null;
+            var c = new Config { Name = Path.GetFileNameWithoutExtension(path) };
+            foreach (string raw in all)
+            {
+                string line = raw.TrimEnd();
+                if (line.StartsWith("name=")) { if (line.Length > 5) c.Name = line.Substring(5); continue; }
+                string[] p = line.Split('|');
+                int mods, vk;
+                if (p.Length == 3 && int.TryParse(p[1], out mods) && int.TryParse(p[2], out vk) && vk != 0)
+                    c.Items.Add(new Binding { Process = p[0], Mods = mods, Vk = vk });
+            }
+            return c;
+        }
+    }
+
+    // ---------------------------------------------------------------- Name prompt
+
+    class NameDialog : Form
+    {
+        public string Value;
+        TextBox tb = new TextBox();
+
+        public NameDialog(string title, string label, string initial, Func<string, string> validate)
+        {
+            Text = title;
+            FormBorderStyle = FormBorderStyle.FixedDialog;
+            MaximizeBox = false; MinimizeBox = false; ShowInTaskbar = false;
+            StartPosition = FormStartPosition.CenterParent;
+            ClientSize = new Size(340, 100);
+            var l = new Label { Text = label, Left = 12, Top = 10, Width = 316, Height = 18 };
+            tb.Left = 12; tb.Top = 30; tb.Width = 316; tb.Text = initial;
+            var ok = new Button { Text = "OK", Left = 172, Top = 64, Width = 75 };
+            var cancel = new Button { Text = "Cancel", Left = 253, Top = 64, Width = 75 };
+            ok.Click += delegate
+            {
+                string name = tb.Text.Trim();
+                string err = validate(name);
+                if (err != null) { MessageBox.Show(this, err, Text); return; }
+                Value = name;
+                DialogResult = DialogResult.OK;
+            };
+            cancel.Click += delegate { DialogResult = DialogResult.Cancel; };
+            AcceptButton = ok; CancelButton = cancel;
+            Controls.AddRange(new Control[] { l, tb, ok, cancel });
+            Shown += delegate { tb.Focus(); tb.SelectAll(); };
         }
     }
 
@@ -247,6 +417,7 @@ namespace HotkeyMute
 
         public AddDialog(Binding existing)
         {
+            bool isAction = existing != null && existing.Action != null;
             Text = existing == null ? "Add hotkey" : "Edit hotkey";
             FormBorderStyle = FormBorderStyle.FixedDialog;
             MaximizeBox = false; MinimizeBox = false; ShowInTaskbar = false;
@@ -267,20 +438,26 @@ namespace HotkeyMute
             var cancel = new Button { Text = "Cancel", Left = 295, Top = 114, Width = 75 };
             ok.Click += delegate
             {
-                if (Audio.Norm(cb.Text).Length == 0) { MessageBox.Show(this, "Enter a program name.", "Add hotkey"); return; }
+                if (!isAction && Audio.Norm(cb.Text).Length == 0) { MessageBox.Show(this, "Enter a program name.", "Add hotkey"); return; }
                 if (Vk == 0) { MessageBox.Show(this, "Press a hotkey in the hotkey box.", "Add hotkey"); return; }
-                ProcessName = cb.Text.Trim();
+                ProcessName = isAction ? null : cb.Text.Trim();
                 DialogResult = DialogResult.OK;
             };
             cancel.Click += delegate { DialogResult = DialogResult.Cancel; };
 
             Controls.AddRange(new Control[] { l1, cb, refresh, l2, tbKey, ok, cancel });
-            FillProcesses();
+            if (isAction)
+            {
+                Text = "Set hotkey";
+                l1.Text = "Built-in: " + BuiltIn.Label(existing.Action) + " (all configs)";
+                cb.Visible = false; refresh.Visible = false;
+            }
+            else FillProcesses();
             if (existing != null)
             {
-                cb.Text = existing.Process;
+                if (!isAction) cb.Text = existing.Process;
                 Mods = existing.Mods; Vk = existing.Vk;
-                tbKey.Text = Hotkeys.Format(Mods, Vk);
+                if (Vk != 0) tbKey.Text = Hotkeys.Format(Mods, Vk);
                 Shown += delegate { tbKey.Focus(); };
             }
         }
@@ -337,8 +514,13 @@ namespace HotkeyMute
         const string RunKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
         const string RunName = "HotkeyMute";
 
-        List<Binding> bindings = new List<Binding>();
+        AppData data;
+        Config current;
+        List<Binding> bindings; // the selected config's program hotkeys
         bool notify = true;
+        // Read by the audio worker (not the UI thread) when a built-in action fires.
+        volatile string[] cfgProcesses = new string[0];
+        volatile string cfgName = "Default";
         bool exiting, allowShow;
         volatile bool capturing;
         // The hook lives on its own thread with its own message loop, so slow work on the UI thread
@@ -353,6 +535,11 @@ namespace HotkeyMute
         System.Windows.Forms.Timer hintTimer = new System.Windows.Forms.Timer();
 
         ListView lv = new ListView();
+        ListViewGroup gProgs = new ListViewGroup("Programs");
+        ListViewGroup gBuiltIn = new ListViewGroup("Built-in actions (shared by all configs, unset by default)");
+        ComboBox cbConfig = new ComboBox();
+        Button btnRename, btnDelete;
+        bool loadingCombo;
         CheckBox cbNotify = new CheckBox();
         CheckBox cbStartup = new CheckBox();
         NotifyIcon tray = new NotifyIcon();
@@ -362,17 +549,44 @@ namespace HotkeyMute
         {
             allowShow = !startHidden;
             Text = "Hotkey Mute v" + Assembly.GetExecutingAssembly().GetName().Version.ToString(3);
-            ClientSize = new Size(600, 320);
-            MinimumSize = new Size(480, 280);
+            ClientSize = new Size(640, 420);
+            MinimumSize = new Size(600, 340);
             StartPosition = FormStartPosition.CenterScreen;
             Icon appIcon = Icon.ExtractAssociatedIcon(Application.ExecutablePath);
             Icon = appIcon;
 
-            bool n; Store.Load(bindings, out n); notify = n;
+            data = Store.Load();
+            notify = data.Notify;
+            current = data.Find(data.Selected);
+            bindings = current.Items;
+
+            var lblCfg = new Label { Text = "Config:", AutoSize = true, Left = 12, Top = 17 };
+            cbConfig.DropDownStyle = ComboBoxStyle.DropDownList; cbConfig.Left = 62; cbConfig.Top = 13; cbConfig.Width = 160;
+            cbConfig.SelectedIndexChanged += delegate
+            {
+                if (loadingCombo) return;
+                Config c = data.Find(cbConfig.SelectedItem as string);
+                if (c != null && c != current) SwitchConfig(c);
+            };
+            var btnNew = new Button { Text = "New", Left = 230, Top = 12, Width = 52 };
+            btnRename = new Button { Text = "Rename", Left = 286, Top = 12, Width = 62 };
+            var btnDup = new Button { Text = "Duplicate", Left = 352, Top = 12, Width = 70 };
+            btnDelete = new Button { Text = "Delete", Left = 426, Top = 12, Width = 52 };
+            var btnExport = new Button { Text = "Export...", Left = 482, Top = 12, Width = 70 };
+            var btnImport = new Button { Text = "Import...", Left = 556, Top = 12, Width = 70 };
+            btnNew.Click += delegate { NewConfig(); };
+            btnRename.Click += delegate { RenameConfig(); };
+            btnDup.Click += delegate { DuplicateConfig(); };
+            btnDelete.Click += delegate { DeleteConfig(); };
+            btnExport.Click += delegate { ExportConfig(); };
+            btnImport.Click += delegate { ImportConfig(); };
+            var cfgTips = new ToolTip();
+            cfgTips.SetToolTip(cbConfig, "Only the selected config's hotkeys are active. Switching does not mute or unmute anything.");
 
             lv.View = View.Details; lv.ShowItemToolTips = true; lv.FullRowSelect = true; lv.MultiSelect = false; lv.HideSelection = false;
-            lv.Columns.Add("Program", 190); lv.Columns.Add("Hotkey", 170); lv.Columns.Add("Status", 160);
-            lv.Left = 12; lv.Top = 12; lv.Width = ClientSize.Width - 24; lv.Height = ClientSize.Height - 90;
+            lv.ShowGroups = true; lv.Groups.Add(gProgs); lv.Groups.Add(gBuiltIn);
+            lv.Columns.Add("Program / action", 230); lv.Columns.Add("Hotkey", 160); lv.Columns.Add("Status", 210);
+            lv.Left = 12; lv.Top = 46; lv.Width = ClientSize.Width - 24; lv.Height = ClientSize.Height - 124;
             lv.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Bottom;
             lv.DoubleClick += delegate { EditBinding(Selected()); };
 
@@ -400,7 +614,10 @@ namespace HotkeyMute
             hintTimer.Interval = 3000;
             hintTimer.Tick += delegate { hintTimer.Stop(); hint.Text = "Closing hides to the tray."; };
 
-            Controls.AddRange(new Control[] { lv, add, remove, toggle, restart, cbNotify, cbStartup, hint });
+            new ToolTip().SetToolTip(remove, "Removes a program from this config. On a built-in action it just clears the hotkey.");
+
+            Controls.AddRange(new Control[] { lblCfg, cbConfig, btnNew, btnRename, btnDup, btnDelete, btnExport, btnImport,
+                lv, add, remove, toggle, restart, cbNotify, cbStartup, hint });
 
             var menu = new ContextMenuStrip();
             menu.Items.Add("Open", null, delegate { ShowWindow(); });
@@ -412,6 +629,7 @@ namespace HotkeyMute
             timer.Tick += delegate { if (Visible) RefreshStatus(); };
             timer.Start();
 
+            FillConfigCombo();
             Reload();
 
             hookProc = HookCb;
@@ -521,13 +739,25 @@ namespace HotkeyMute
 
         void FireWork(Binding b)
         {
-            string who = b.Process, text;
+            string who, text;
             try
             {
-                bool? r = Audio.Toggle(who);
-                text = r == null ? "no audio session found (is it playing sound?)" : (r.Value ? "muted" : "unmuted");
+                if (b.Action == null)
+                {
+                    who = b.Process;
+                    bool? r = Audio.Toggle(who);
+                    text = r == null ? "no audio session found (is it playing sound?)" : (r.Value ? "muted" : "unmuted");
+                }
+                else
+                {
+                    bool mute = !b.Action.EndsWith("-unmute");
+                    bool system = b.Action.StartsWith("sys");
+                    int n = Audio.SetMuteAll(system ? null : cfgProcesses, mute);
+                    who = system ? "Everything" : "Config " + cfgName;
+                    text = (mute ? "muted" : "unmuted") + " (" + n + (n == 1 ? " stream)" : " streams)");
+                }
             }
-            catch (Exception ex) { text = "Error: " + ex.Message; }
+            catch (Exception ex) { who = b.Process ?? BuiltIn.Label(b.Action); text = "Error: " + ex.Message; }
             try { BeginInvoke(new Action(delegate { Notify(who, text); if (Visible) RefreshStatus(); })); }
             catch { } // window already closed
         }
@@ -541,26 +771,46 @@ namespace HotkeyMute
 
         void Reload()
         {
-            snapshot = bindings.ToArray();
+            var names = new List<string>();
+            foreach (var b in bindings) names.Add(b.Process);
+            cfgProcesses = names.ToArray();
+            cfgName = current.Name;
+
+            // Everything that is live right now: the selected config's programs plus any bound built-in actions.
+            var active = new List<Binding>(bindings);
+            foreach (var a in data.Actions) if (a.Vk != 0) active.Add(a);
+            snapshot = active.ToArray();
+
+            lv.BeginUpdate();
             lv.Items.Clear();
-            foreach (var b in bindings)
+            foreach (var b in bindings) lv.Items.Add(MakeItem(b, active, gProgs));
+            foreach (var a in data.Actions) lv.Items.Add(MakeItem(a, active, gBuiltIn));
+            lv.EndUpdate();
+            RefreshStatus();
+        }
+
+        ListViewItem MakeItem(Binding b, List<Binding> active, ListViewGroup group)
+        {
+            bool isAction = b.Action != null;
+            var item = new ListViewItem(isAction ? BuiltIn.Label(b.Action) : b.Process, group);
+            string keyText = b.Vk == 0 ? "(not set)" : Hotkeys.Format(b.Mods, b.Vk);
+            if (isAction) item.ToolTipText = BuiltIn.Scope(b.Action) + ". Double-click to set the hotkey.";
+            if (b.Vk != 0)
             {
-                var item = new ListViewItem(b.Process);
-                // Several programs may share a hotkey on purpose; flag it so it is never a surprise.
+                // Several rows may share a hotkey on purpose; flag it so it is never a surprise.
                 var others = new List<string>();
-                foreach (var o in bindings) if (o != b && o.Mods == b.Mods && o.Vk == b.Vk) others.Add(o.Process);
-                string keyText = Hotkeys.Format(b.Mods, b.Vk);
+                foreach (var o in active)
+                    if (o != b && o.Mods == b.Mods && o.Vk == b.Vk) others.Add(o.Process ?? BuiltIn.Label(o.Action));
                 if (others.Count > 0)
                 {
                     keyText = "\u26A0 " + keyText;
-                    item.ToolTipText = "Shared hotkey - also toggles: " + string.Join(", ", others.ToArray());
+                    item.ToolTipText = "Shared hotkey - also triggers: " + string.Join(", ", others.ToArray());
                 }
-                item.SubItems.Add(keyText);
-                item.SubItems.Add("");
-                item.Tag = b;
-                lv.Items.Add(item);
             }
-            RefreshStatus();
+            item.SubItems.Add(keyText);
+            item.SubItems.Add(isAction ? BuiltIn.Scope(b.Action) : "");
+            item.Tag = b;
+            return item;
         }
 
         void RefreshStatus()
@@ -568,6 +818,7 @@ namespace HotkeyMute
             var all = Audio.Sessions();
             foreach (ListViewItem item in lv.Items)
             {
+                if (((Binding)item.Tag).Action != null) continue;
                 string want = Audio.Norm(((Binding)item.Tag).Process);
                 string status = "No audio session"; bool found = false, anyUnmuted = false;
                 foreach (var s in all)
@@ -588,17 +839,27 @@ namespace HotkeyMute
         // existing == null adds a new binding; otherwise edits that one in place.
         void EditBinding(Binding existing)
         {
-            capturing = true;
-            try
+            RunModal(delegate
             {
                 using (var dlg = new AddDialog(existing))
                 {
                     if (dlg.ShowDialog(this) != DialogResult.OK) return;
                     if (existing == null) bindings.Add(new Binding { Process = dlg.ProcessName, Mods = dlg.Mods, Vk = dlg.Vk });
-                    else { existing.Process = dlg.ProcessName; existing.Mods = dlg.Mods; existing.Vk = dlg.Vk; }
+                    else
+                    {
+                        if (existing.Action == null) existing.Process = dlg.ProcessName;
+                        existing.Mods = dlg.Mods; existing.Vk = dlg.Vk;
+                    }
                     Save(); Reload();
                 }
-            }
+            });
+        }
+
+        // Hotkeys must not fire while a dialog is open (the user may be typing or picking a key).
+        void RunModal(Action show)
+        {
+            capturing = true;
+            try { show(); }
             finally { capturing = false; lock (held) { held.Clear(); } }
         }
 
@@ -606,7 +867,9 @@ namespace HotkeyMute
         {
             Binding b = Selected();
             if (b == null) return;
-            bindings.Remove(b); Save(); Reload();
+            if (b.Action != null) { b.Mods = 0; b.Vk = 0; } // built-in actions stay in the list, just unset
+            else bindings.Remove(b);
+            Save(); Reload();
         }
 
         void ToggleSelected()
@@ -615,7 +878,132 @@ namespace HotkeyMute
             if (b != null) Fire(b);
         }
 
-        void Save() { Store.Save(bindings, notify); }
+        void Save() { data.Notify = notify; data.Selected = current.Name; Store.Save(data); }
+
+        // ------------------------------------------------------------ configs
+
+        static bool IsDefault(Config c) { return string.Equals(c.Name, "Default", StringComparison.OrdinalIgnoreCase); }
+
+        void FillConfigCombo()
+        {
+            loadingCombo = true;
+            cbConfig.Items.Clear();
+            foreach (var c in data.Configs) cbConfig.Items.Add(c.Name);
+            cbConfig.SelectedItem = current.Name;
+            loadingCombo = false;
+            btnRename.Enabled = btnDelete.Enabled = !IsDefault(current); // Default can be neither renamed nor deleted
+        }
+
+        void SwitchConfig(Config c)
+        {
+            current = c; bindings = c.Items;
+            Save(); FillConfigCombo(); Reload();
+        }
+
+        string ValidateName(string name, Config except)
+        {
+            if (name.Length == 0) return "Enter a name.";
+            if (name.IndexOfAny(new char[] { '[', ']', '|', '\r', '\n' }) >= 0) return "Names cannot contain [ ] | or line breaks.";
+            foreach (var c in data.Configs)
+                if (c != except && string.Equals(c.Name, name, StringComparison.OrdinalIgnoreCase)) return "A config with that name already exists.";
+            return null;
+        }
+
+        string AskName(string title, string label, string initial, Config except)
+        {
+            string result = null;
+            RunModal(delegate
+            {
+                using (var dlg = new NameDialog(title, label, initial, delegate(string n) { return ValidateName(n, except); }))
+                    if (dlg.ShowDialog(this) == DialogResult.OK) result = dlg.Value;
+            });
+            return result;
+        }
+
+        void NewConfig()
+        {
+            string name = AskName("New config", "Name for the new config:", "", null);
+            if (name == null) return;
+            var c = new Config { Name = name };
+            data.Configs.Add(c);
+            SwitchConfig(c);
+        }
+
+        void RenameConfig()
+        {
+            if (IsDefault(current)) return;
+            string name = AskName("Rename config", "New name:", current.Name, current);
+            if (name == null) return;
+            current.Name = name;
+            Save(); FillConfigCombo(); Reload();
+        }
+
+        void DuplicateConfig()
+        {
+            string name = AskName("Duplicate config", "Name for the copy:", current.Name + " copy", null);
+            if (name == null) return;
+            var c = new Config { Name = name };
+            foreach (var b in current.Items) c.Items.Add(new Binding { Process = b.Process, Mods = b.Mods, Vk = b.Vk });
+            data.Configs.Add(c);
+            SwitchConfig(c);
+        }
+
+        void DeleteConfig()
+        {
+            if (IsDefault(current)) return;
+            DialogResult r = DialogResult.No;
+            RunModal(delegate
+            {
+                r = MessageBox.Show(this, "Delete config \"" + current.Name + "\" and its " + current.Items.Count + " hotkey(s)?",
+                    "Delete config", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
+            });
+            if (r != DialogResult.Yes) return;
+            data.Configs.Remove(current);
+            SwitchConfig(data.Find("Default"));
+        }
+
+        void ExportConfig()
+        {
+            RunModal(delegate
+            {
+                using (var dlg = new SaveFileDialog())
+                {
+                    dlg.Title = "Export config";
+                    dlg.Filter = "Hotkey Mute config (*.hmcfg)|*.hmcfg";
+                    dlg.FileName = current.Name + ".hmcfg";
+                    if (dlg.ShowDialog(this) != DialogResult.OK) return;
+                    try { Store.Export(current, dlg.FileName); }
+                    catch (Exception ex) { MessageBox.Show(this, "Could not export: " + ex.Message, "Export config"); }
+                }
+            });
+        }
+
+        void ImportConfig()
+        {
+            RunModal(delegate
+            {
+                using (var dlg = new OpenFileDialog())
+                {
+                    dlg.Title = "Import config";
+                    dlg.Filter = "Hotkey Mute config (*.hmcfg)|*.hmcfg|All files (*.*)|*.*";
+                    if (dlg.ShowDialog(this) != DialogResult.OK) return;
+                    Config c;
+                    try { c = Store.Import(dlg.FileName); }
+                    catch (Exception ex) { MessageBox.Show(this, "Could not read the file: " + ex.Message, "Import config"); return; }
+                    if (c == null) { MessageBox.Show(this, "That is not a Hotkey Mute config file.", "Import config"); return; }
+
+                    // Never overwrite: pick a free name.
+                    string baseName = c.Name.Trim();
+                    foreach (char bad in new char[] { '[', ']', '|', '\r', '\n' }) baseName = baseName.Replace(bad, '_');
+                    if (baseName.Length == 0) baseName = "Imported";
+                    string name = baseName;
+                    for (int i = 2; ValidateName(name, null) != null; i++) name = baseName + " (" + i + ")";
+                    c.Name = name;
+                    data.Configs.Add(c);
+                    SwitchConfig(c);
+                }
+            });
+        }
 
         // ------------------------------------------------------------ start with Windows
 
