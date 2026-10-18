@@ -352,7 +352,7 @@ namespace HotkeyMute
 
             bool n; Store.Load(bindings, out n); notify = n;
 
-            lv.View = View.Details; lv.FullRowSelect = true; lv.MultiSelect = false; lv.HideSelection = false;
+            lv.View = View.Details; lv.ShowItemToolTips = true; lv.FullRowSelect = true; lv.MultiSelect = false; lv.HideSelection = false;
             lv.Columns.Add("Program", 190); lv.Columns.Add("Hotkey", 170); lv.Columns.Add("Status", 160);
             lv.Left = 12; lv.Top = 12; lv.Width = ClientSize.Width - 24; lv.Height = ClientSize.Height - 90;
             lv.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Bottom;
@@ -475,7 +475,16 @@ namespace HotkeyMute
             foreach (var b in bindings)
             {
                 var item = new ListViewItem(b.Process);
-                item.SubItems.Add(Hotkeys.Format(b.Mods, b.Vk));
+                // Several programs may share a hotkey on purpose; flag it so it is never a surprise.
+                var others = new List<string>();
+                foreach (var o in bindings) if (o != b && o.Mods == b.Mods && o.Vk == b.Vk) others.Add(o.Process);
+                string keyText = Hotkeys.Format(b.Mods, b.Vk);
+                if (others.Count > 0)
+                {
+                    keyText = "\u26A0 " + keyText;
+                    item.ToolTipText = "Shared hotkey - also toggles: " + string.Join(", ", others.ToArray());
+                }
+                item.SubItems.Add(keyText);
                 item.SubItems.Add("");
                 item.Tag = b;
                 lv.Items.Add(item);
@@ -514,14 +523,6 @@ namespace HotkeyMute
                 using (var dlg = new AddDialog(existing))
                 {
                     if (dlg.ShowDialog(this) != DialogResult.OK) return;
-                    foreach (var b in bindings)
-                    {
-                        if (b != existing && b.Mods == dlg.Mods && b.Vk == dlg.Vk)
-                        {
-                            MessageBox.Show(this, Hotkeys.Format(b.Mods, b.Vk) + " is already used for " + b.Process + ".", "Hotkey Mute");
-                            return;
-                        }
-                    }
                     if (existing == null) bindings.Add(new Binding { Process = dlg.ProcessName, Mods = dlg.Mods, Vk = dlg.Vk });
                     else { existing.Process = dlg.ProcessName; existing.Mods = dlg.Mods; existing.Vk = dlg.Vk; }
                     Save(); Reload();

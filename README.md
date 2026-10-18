@@ -8,6 +8,10 @@ A small Windows tray app that lets you register global hotkeys to mute/unmute in
 2. Click **Add...**, pick a program that is playing audio (or type a name such as `game.exe`), click the hotkey box and press the key combination.
 3. Press the hotkey anywhere to toggle that program's mute. Double-click a row (or **Toggle now**) to toggle from the window.
 
+Several programs can share one hotkey (they are marked with a warning sign in the list). Pressing it toggles all of them, and each flips from its own current state. Combined with **Toggle now** this lets you set up programs that swap back and forth.
+
+Double-click a row to edit its program and hotkey.
+
 Closing the window keeps the app running in the system tray (right-click the icon for Open / Exit). Optional: show notifications, start with Windows.
 Bindings are stored in `%APPDATA%\HotkeyMute\settings.txt`.
 
