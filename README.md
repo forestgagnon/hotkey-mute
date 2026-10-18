@@ -12,6 +12,8 @@ Several programs can share one hotkey (they are marked with a warning sign in th
 
 Double-click a row to edit its program and hotkey.
 
+If your hotkeys ever stop responding, click **Reset keyboard listener**. The keyboard listener runs on its own thread so it shouldn't stall, but this reinstalls it on demand. Your settings aren't changed.
+
 Closing the window keeps the app running in the system tray (right-click the icon for Open / Exit). Optional: show notifications, start with Windows.
 Bindings are stored in `%APPDATA%\HotkeyMute\settings.txt`.
 

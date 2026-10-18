@@ -18,7 +18,7 @@ using System.Windows.Forms;
 using Microsoft.Win32;
 
 // Bump this for each release; it is shown in the window title and the exe properties.
-[assembly: AssemblyVersion("1.2.1")]
+[assembly: AssemblyVersion("1.3.0")]
 [assembly: AssemblyTitle("Hotkey Mute")]
 
 namespace HotkeyMute
@@ -328,16 +328,29 @@ namespace HotkeyMute
         [DllImport("user32.dll")] static extern IntPtr CallNextHookEx(IntPtr h, int code, IntPtr w, IntPtr l);
         [DllImport("user32.dll")] static extern short GetAsyncKeyState(int vk);
         [DllImport("kernel32.dll")] static extern IntPtr GetModuleHandle(string name);
+        [DllImport("kernel32.dll")] static extern uint GetCurrentThreadId();
+        [DllImport("user32.dll")] static extern int GetMessage(out MSG msg, IntPtr hWnd, uint min, uint max);
+        [DllImport("user32.dll")] static extern bool PeekMessage(out MSG msg, IntPtr hWnd, uint min, uint max, uint remove);
+        [DllImport("user32.dll")] static extern bool PostThreadMessage(uint tid, uint msg, IntPtr w, IntPtr l);
+        [StructLayout(LayoutKind.Sequential)] struct MSG { public IntPtr hwnd; public uint message; public IntPtr wParam, lParam; public uint time; public int x, y; }
 
         const string RunKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
         const string RunName = "HotkeyMute";
 
         List<Binding> bindings = new List<Binding>();
         bool notify = true;
-        bool exiting, allowShow, capturing;
-        HashSet<int> held = new HashSet<int>();
+        bool exiting, allowShow;
+        volatile bool capturing;
+        // The hook lives on its own thread with its own message loop, so slow work on the UI thread
+        // (audio lookups, dialogs) can never make Windows time out and silently drop it.
+        // Everything the hook thread reads is either locked (held) or an immutable snapshot (snapshot).
+        readonly HashSet<int> held = new HashSet<int>();
+        volatile Binding[] snapshot = new Binding[0];
         HookProc hookProc;
-        IntPtr hook = IntPtr.Zero;
+        Thread hookThread;
+        uint hookThreadId;
+        Label hint;
+        System.Windows.Forms.Timer hintTimer = new System.Windows.Forms.Timer();
 
         ListView lv = new ListView();
         CheckBox cbNotify = new CheckBox();
@@ -349,7 +362,7 @@ namespace HotkeyMute
         {
             allowShow = !startHidden;
             Text = "Hotkey Mute v" + Assembly.GetExecutingAssembly().GetName().Version.ToString(3);
-            ClientSize = new Size(560, 320);
+            ClientSize = new Size(600, 320);
             MinimumSize = new Size(480, 280);
             StartPosition = FormStartPosition.CenterScreen;
             Icon appIcon = Icon.ExtractAssociatedIcon(Application.ExecutablePath);
@@ -366,6 +379,9 @@ namespace HotkeyMute
             var add = new Button { Text = "Add...", Left = 12, Top = ClientSize.Height - 68, Width = 80, Anchor = AnchorStyles.Bottom | AnchorStyles.Left };
             var remove = new Button { Text = "Remove", Left = 98, Top = ClientSize.Height - 68, Width = 80, Anchor = AnchorStyles.Bottom | AnchorStyles.Left };
             var toggle = new Button { Text = "Toggle now", Left = 184, Top = ClientSize.Height - 68, Width = 90, Anchor = AnchorStyles.Bottom | AnchorStyles.Left };
+            var restart = new Button { Text = "Reset keyboard listener", Left = 280, Top = ClientSize.Height - 68, Width = 150, Anchor = AnchorStyles.Bottom | AnchorStyles.Left };
+            restart.Click += delegate { RestartHook(); };
+            new ToolTip().SetToolTip(restart, "If your hotkeys stop responding, click this to reload the keyboard listener.\nYour settings are not changed.");
             add.Click += delegate { EditBinding(null); };
             remove.Click += delegate { RemoveSelected(); };
             toggle.Click += delegate { ToggleSelected(); };
@@ -379,10 +395,12 @@ namespace HotkeyMute
             cbStartup.Checked = GetStartup();
             cbStartup.CheckedChanged += delegate { SetStartup(cbStartup.Checked); };
 
-            var hint = new Label { Text = "Closing the window keeps it running in the tray.", AutoSize = true, ForeColor = SystemColors.GrayText,
-                Left = 300, Top = ClientSize.Height - 62, Anchor = AnchorStyles.Bottom | AnchorStyles.Left };
+            hint = new Label { Text = "Closing hides to the tray.", AutoSize = true, ForeColor = SystemColors.GrayText,
+                Left = 440, Top = ClientSize.Height - 62, Anchor = AnchorStyles.Bottom | AnchorStyles.Left };
+            hintTimer.Interval = 3000;
+            hintTimer.Tick += delegate { hintTimer.Stop(); hint.Text = "Closing hides to the tray."; };
 
-            Controls.AddRange(new Control[] { lv, add, remove, toggle, cbNotify, cbStartup, hint });
+            Controls.AddRange(new Control[] { lv, add, remove, toggle, restart, cbNotify, cbStartup, hint });
 
             var menu = new ContextMenuStrip();
             menu.Items.Add("Open", null, delegate { ShowWindow(); });
@@ -397,8 +415,48 @@ namespace HotkeyMute
             Reload();
 
             hookProc = HookCb;
-            hook = SetWindowsHookEx(13, hookProc, GetModuleHandle(null), 0);
-            if (hook == IntPtr.Zero) MessageBox.Show("Could not start keyboard monitoring; hotkeys will not work.", "Hotkey Mute");
+            if (!StartHook()) MessageBox.Show("Could not start keyboard monitoring; hotkeys will not work.", "Hotkey Mute");
+        }
+
+        bool StartHook()
+        {
+            var ready = new ManualResetEvent(false);
+            bool ok = false;
+            var t = new Thread(delegate()
+            {
+                IntPtr h = SetWindowsHookEx(13, hookProc, GetModuleHandle(null), 0);
+                hookThreadId = GetCurrentThreadId();
+                ok = h != IntPtr.Zero;
+                MSG m;
+                PeekMessage(out m, IntPtr.Zero, 0, 0, 0); // creates this thread's message queue before we signal
+                ready.Set();
+                if (!ok) return;
+                while (GetMessage(out m, IntPtr.Zero, 0, 0) > 0) { } // runs until WM_QUIT
+                UnhookWindowsHookEx(h);
+            });
+            t.IsBackground = true; t.Name = "Hotkey Mute keyboard hook";
+            t.Start();
+            ready.WaitOne();
+            if (ok) hookThread = t;
+            return ok;
+        }
+
+        void StopHook()
+        {
+            Thread t = hookThread;
+            if (t == null) return;
+            PostThreadMessage(hookThreadId, 0x12, IntPtr.Zero, IntPtr.Zero); // WM_QUIT
+            t.Join(1000);
+            hookThread = null;
+        }
+
+        // Manual recovery: tear the hook down and install a fresh one. Only ever runs when the user asks.
+        void RestartHook()
+        {
+            StopHook();
+            lock (held) { held.Clear(); }
+            hint.Text = StartHook() ? "Listener reset. Try it now." : "Could not reset the listener.";
+            hintTimer.Stop(); hintTimer.Start();
         }
 
         protected override void SetVisibleCore(bool value)
@@ -415,13 +473,14 @@ namespace HotkeyMute
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
             if (!exiting && e.CloseReason == CloseReason.UserClosing) { e.Cancel = true; Hide(); return; }
-            if (hook != IntPtr.Zero) { UnhookWindowsHookEx(hook); hook = IntPtr.Zero; }
+            StopHook();
             tray.Visible = false;
             base.OnFormClosing(e);
         }
 
         // ------------------------------------------------------------ hotkey handling
 
+        // Runs on the hook thread: must stay tiny. No COM, no UI.
         IntPtr HookCb(int code, IntPtr w, IntPtr l)
         {
             if (code >= 0)
@@ -430,22 +489,18 @@ namespace HotkeyMute
                 int vk = Marshal.ReadInt32(l);
                 if (msg == 0x100 || msg == 0x104) // key down / sys key down
                 {
-                    if (held.Add(vk) && !capturing)
+                    bool first;
+                    lock (held) { first = held.Add(vk); }
+                    if (first && !capturing)
                     {
                         int mods = CurrentMods();
-                        foreach (var b in bindings.ToArray())
-                        {
-                            if (b.Vk == vk && b.Mods == mods)
-                            {
-                                Binding hit = b;
-                                BeginInvoke(new Action(delegate { Fire(hit); }));
-                            }
-                        }
+                        foreach (var b in snapshot)
+                            if (b.Vk == vk && b.Mods == mods) Fire(b);
                     }
                 }
-                else if (msg == 0x101 || msg == 0x105) held.Remove(vk);
+                else if (msg == 0x101 || msg == 0x105) { lock (held) { held.Remove(vk); } }
             }
-            return CallNextHookEx(hook, code, w, l);
+            return CallNextHookEx(IntPtr.Zero, code, w, l);
         }
 
         static int CurrentMods()
@@ -458,13 +513,23 @@ namespace HotkeyMute
             return m;
         }
 
+        // Audio work happens on a thread-pool thread, never on the hook or UI thread.
         void Fire(Binding b)
         {
-            bool? r;
-            try { r = Audio.Toggle(b.Process); }
-            catch (Exception ex) { Notify(b.Process, "Error: " + ex.Message); return; }
-            Notify(b.Process, r == null ? "no audio session found (is it playing sound?)" : (r.Value ? "muted" : "unmuted"));
-            if (Visible) RefreshStatus();
+            ThreadPool.QueueUserWorkItem(delegate { FireWork(b); });
+        }
+
+        void FireWork(Binding b)
+        {
+            string who = b.Process, text;
+            try
+            {
+                bool? r = Audio.Toggle(who);
+                text = r == null ? "no audio session found (is it playing sound?)" : (r.Value ? "muted" : "unmuted");
+            }
+            catch (Exception ex) { text = "Error: " + ex.Message; }
+            try { BeginInvoke(new Action(delegate { Notify(who, text); if (Visible) RefreshStatus(); })); }
+            catch { } // window already closed
         }
 
         void Notify(string who, string what)
@@ -476,6 +541,7 @@ namespace HotkeyMute
 
         void Reload()
         {
+            snapshot = bindings.ToArray();
             lv.Items.Clear();
             foreach (var b in bindings)
             {
@@ -533,7 +599,7 @@ namespace HotkeyMute
                     Save(); Reload();
                 }
             }
-            finally { capturing = false; held.Clear(); }
+            finally { capturing = false; lock (held) { held.Clear(); } }
         }
 
         void RemoveSelected()
