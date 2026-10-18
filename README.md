@@ -1,10 +1,13 @@
-# Windows Hotkey Mute
+# Hotkey Mute
 
-A small Windows tray app that lets you register global hotkeys to mute/unmute individual programs, independently of each other. Supports saved configs and built-in mute-all actions.
+> # ⚠️ WINDOWS ONLY
+> **This app only runs on Windows (10/11).** It uses Windows-specific audio and keyboard APIs. There is no macOS or Linux version.
+
+A small tray app that lets you register global hotkeys to mute/unmute individual programs, independently of each other. Supports saved configs and built-in mute-all actions.
 
 ## Install
 
-1. Go to the [Releases page](https://github.com/forestgagnon/windows-hotkey-mute/releases) and download `HotkeyMute.exe` from the latest release.
+1. Go to the [Releases page](https://github.com/forestgagnon/hotkey-mute/releases) and download `HotkeyMute.exe` from the latest release.
 2. Put it anywhere you like and run it. There is no installer, and no admin rights are needed.
 3. Windows SmartScreen may warn about an unrecognized app because the exe is not code-signed. Choose **More info** > **Run anyway**.
 
@@ -28,8 +31,8 @@ To remove it, exit from the tray menu, untick **Start with Windows**, and delete
 Requirements: Windows with PowerShell. No SDK is needed; the build uses the C# compiler (`csc.exe`, .NET Framework 4.x) that ships with Windows.
 
 ```powershell
-git clone https://github.com/forestgagnon/windows-hotkey-mute
-cd windows-hotkey-mute
+git clone https://github.com/forestgagnon/hotkey-mute
+cd hotkey-mute
 powershell -NoProfile -ExecutionPolicy Bypass -File build.ps1
 ```
 
