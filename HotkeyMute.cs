@@ -238,9 +238,11 @@ namespace HotkeyMute
 
         [DllImport("user32.dll")] static extern short GetAsyncKeyState(int vk);
 
-        public AddDialog()
+        public AddDialog() : this(null) { }
+
+        public AddDialog(Binding existing)
         {
-            Text = "Add hotkey";
+            Text = existing == null ? "Add hotkey" : "Edit hotkey";
             FormBorderStyle = FormBorderStyle.FixedDialog;
             MaximizeBox = false; MinimizeBox = false; ShowInTaskbar = false;
             StartPosition = FormStartPosition.CenterParent;
@@ -269,6 +271,13 @@ namespace HotkeyMute
 
             Controls.AddRange(new Control[] { l1, cb, refresh, l2, tbKey, ok, cancel });
             FillProcesses();
+            if (existing != null)
+            {
+                cb.Text = existing.Process;
+                Mods = existing.Mods; Vk = existing.Vk;
+                tbKey.Text = Hotkeys.Format(Mods, Vk);
+                Shown += delegate { tbKey.Focus(); };
+            }
         }
 
         void FillProcesses()
@@ -347,12 +356,12 @@ namespace HotkeyMute
             lv.Columns.Add("Program", 190); lv.Columns.Add("Hotkey", 170); lv.Columns.Add("Status", 160);
             lv.Left = 12; lv.Top = 12; lv.Width = ClientSize.Width - 24; lv.Height = ClientSize.Height - 90;
             lv.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Bottom;
-            lv.DoubleClick += delegate { ToggleSelected(); };
+            lv.DoubleClick += delegate { EditBinding(Selected()); };
 
             var add = new Button { Text = "Add...", Left = 12, Top = ClientSize.Height - 68, Width = 80, Anchor = AnchorStyles.Bottom | AnchorStyles.Left };
             var remove = new Button { Text = "Remove", Left = 98, Top = ClientSize.Height - 68, Width = 80, Anchor = AnchorStyles.Bottom | AnchorStyles.Left };
             var toggle = new Button { Text = "Toggle now", Left = 184, Top = ClientSize.Height - 68, Width = 90, Anchor = AnchorStyles.Bottom | AnchorStyles.Left };
-            add.Click += delegate { AddBinding(); };
+            add.Click += delegate { EditBinding(null); };
             remove.Click += delegate { RemoveSelected(); };
             toggle.Click += delegate { ToggleSelected(); };
 
@@ -496,23 +505,25 @@ namespace HotkeyMute
             return lv.SelectedItems.Count == 0 ? null : (Binding)lv.SelectedItems[0].Tag;
         }
 
-        void AddBinding()
+        // existing == null adds a new binding; otherwise edits that one in place.
+        void EditBinding(Binding existing)
         {
             capturing = true;
             try
             {
-                using (var dlg = new AddDialog())
+                using (var dlg = new AddDialog(existing))
                 {
                     if (dlg.ShowDialog(this) != DialogResult.OK) return;
                     foreach (var b in bindings)
                     {
-                        if (b.Mods == dlg.Mods && b.Vk == dlg.Vk)
+                        if (b != existing && b.Mods == dlg.Mods && b.Vk == dlg.Vk)
                         {
                             MessageBox.Show(this, Hotkeys.Format(b.Mods, b.Vk) + " is already used for " + b.Process + ".", "Hotkey Mute");
                             return;
                         }
                     }
-                    bindings.Add(new Binding { Process = dlg.ProcessName, Mods = dlg.Mods, Vk = dlg.Vk });
+                    if (existing == null) bindings.Add(new Binding { Process = dlg.ProcessName, Mods = dlg.Mods, Vk = dlg.Vk });
+                    else { existing.Process = dlg.ProcessName; existing.Mods = dlg.Mods; existing.Vk = dlg.Vk; }
                     Save(); Reload();
                 }
             }
