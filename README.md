@@ -2,6 +2,13 @@
 
 A small Windows tray app that lets you register global hotkeys to mute/unmute individual programs, independently of each other.
 
+## Install
+
+1. Go to the [Releases page](https://github.com/forestgagnon/windows-hotkey-mute/releases) and download `HotkeyMute.exe` from the latest release.
+2. Put it anywhere you like and run it. There is no installer, and no admin rights are needed.
+3. Windows SmartScreen may warn about an unrecognized app because the exe is not code-signed. Choose **More info** > **Run anyway**.
+
+It runs in the system tray; tick **Start with Windows** in the window if you want it to launch at login. To remove it, exit from the tray menu, untick **Start with Windows**, and delete the exe (settings live in `%APPDATA%\HotkeyMute`).
 ## Usage
 
 1. Run `HotkeyMute.exe`.
@@ -61,3 +68,7 @@ Equivalent manual compile (needs an existing `HotkeyMute.ico`, or drop `/win32ic
 ```
 
 The source is plain C# 5, so it also builds with newer compilers.
+
+## License
+
+[MIT](LICENSE)
