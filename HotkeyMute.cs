@@ -11,10 +11,15 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
 using System.IO;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Windows.Forms;
 using Microsoft.Win32;
+
+// Bump this for each release; it is shown in the window title and the exe properties.
+[assembly: AssemblyVersion("1.2.1")]
+[assembly: AssemblyTitle("Hotkey Mute")]
 
 namespace HotkeyMute
 {
@@ -343,7 +348,7 @@ namespace HotkeyMute
         public MainForm(bool startHidden)
         {
             allowShow = !startHidden;
-            Text = "Hotkey Mute";
+            Text = "Hotkey Mute v" + Assembly.GetExecutingAssembly().GetName().Version.ToString(3);
             ClientSize = new Size(560, 320);
             MinimumSize = new Size(480, 280);
             StartPosition = FormStartPosition.CenterScreen;
