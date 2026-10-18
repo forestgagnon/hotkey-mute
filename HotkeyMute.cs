@@ -18,7 +18,7 @@ using System.Windows.Forms;
 using Microsoft.Win32;
 
 // Bump this for each release; it is shown in the window title and the exe properties.
-[assembly: AssemblyVersion("1.4.0")]
+[assembly: AssemblyVersion("1.4.1")]
 [assembly: AssemblyTitle("Hotkey Mute")]
 
 namespace HotkeyMute
